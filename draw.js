@@ -1,3 +1,4 @@
+// Returns a random whole number from 0 to n - 1, using the browser's secure random generator with no bias.
 function rand(n) {
   const limit = Math.floor(2 ** 32 / n) * n;
   const value = new Uint32Array(1);
@@ -5,6 +6,7 @@ function rand(n) {
   return value[0] % n;
 }
 
+// Returns a copy of the list in random order (Fisher–Yates), where every order is equally likely.
 function shuffle(items) {
   const copy = [...items];
   for (let i = copy.length - 1; i > 0; i--) {
@@ -14,16 +16,19 @@ function shuffle(items) {
   return copy;
 }
 
+// Picks one random player from each of the two categories to make a team.
 function pickTeam(pairing) {
   return { a: pairing.remA[rand(pairing.remA.length)], b: pairing.remB[rand(pairing.remB.length)] };
 }
 
+// Shuffles the teams, then deals them into the groups one by one, like dealing cards.
 function splitIntoGroups(teamIds, groupCount) {
   const groups = Array.from({ length: groupCount }, () => []);
   shuffle(teamIds).forEach((id, i) => groups[i % groupCount].push(id));
   return groups;
 }
 
+// Builds a group's matches in random order; for 'one', pairs each team with a random opponent.
 function scheduleMatches(ids, format) {
   const newMatch = (p1, p2) => ({ p1, p2, winner: null });
   if (format === 'one') {
