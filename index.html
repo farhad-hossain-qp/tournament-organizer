@@ -503,10 +503,10 @@ button.add-player:hover .add-hint, button.add-player:focus-visible .add-hint { o
 .inline-add { margin-top: 16px; }
 .map-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: #ffffff; }
 .map-svg { display: block; width: 100%; height: auto; }
-.map-print { display: none; }
-@page { size: A4 portrait; margin: 12mm; }
+/* Page margin 0 leaves the browser no room for its date/URL header and footer; body padding gives the white border instead, repeated on every page. */
+@page { size: A4 portrait; margin: 0; }
 @media print {
-  body { background: #ffffff; }
+  body { background: #ffffff; padding: 10mm; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   .header-actions, .stepper, .stage-nav, .skip-link { display: none !important; }
   header { padding: 0 0 8px; }
   main { padding: 0; }
@@ -516,11 +516,7 @@ button.add-player:hover .add-hint, button.add-player:focus-visible .add-hint { o
   .map-view { position: static; overflow: visible; padding: 0; background: #ffffff; }
   .map-view .sheet-bar { display: none; }
   .map-scroll { overflow: visible; border: 0; }
-  .map-scroll > .map-svg { display: none; }
-  .map-print { display: block; }
-  /* Print at 80% of the map's natural size; only shrink further if it doesn't fit the page. Never stretch. */
-  .map-print .map-svg { min-width: 0 !important; width: calc(var(--w) * 0.8px); max-width: 100%; height: auto; max-height: 188mm; margin: 0 auto; }
-  .map-print .map-svg + .map-svg { break-before: page; }
+  .map-svg { min-width: 0 !important; width: 100%; max-height: 188mm; }
 }
 .stepper {
   position: sticky;
@@ -1901,20 +1897,18 @@ function mapMatch(x, yc, match) {
     </g>`;
 }
 
-const MAP_COL_GAP = 24;
-const mapGroupWidth = (cols = 1) => cols * MAP.matchW + (cols - 1) * MAP_COL_GAP + MAP.framePad * 2;
-const mapGroupHeight = (group, cols = 1) => MAP.frameTitle + Math.ceil(group.matches.length / cols) * MAP.fixtureStep - MAP.fixtureGap + MAP.framePad;
+const mapGroupWidth = () => MAP.matchW + MAP.framePad * 2;
+const mapGroupHeight = group => MAP.frameTitle + group.matches.length * MAP.fixtureStep - MAP.fixtureGap + MAP.framePad;
 
-// Draws a group's dashed frame and its matches, laid out in `cols` columns (read left to right).
-function mapGroup(group, x, top, gi, cols = 1) {
+function mapGroup(group, x, top, gi) {
   const left = x + MAP.framePad;
   return `
-    <rect x="${x}" y="${top}" width="${mapGroupWidth(cols)}" height="${mapGroupHeight(group, cols)}" rx="12" fill="none"
+    <rect x="${x}" y="${top}" width="${mapGroupWidth()}" height="${mapGroupHeight(group)}" rx="12" fill="none"
       stroke="${MAP_COLORS.line}" stroke-width="1.4" stroke-dasharray="7 5"/>
     <text x="${left}" y="${top + 28}" font-size="${MAP_TEXT.group}" font-weight="700" fill="${MAP_COLORS.text}">${esc(group.name)}</text>
     ${group.matches.map((m, i) => {
-      const boxTop = top + MAP.frameTitle + Math.floor(i / cols) * MAP.fixtureStep;
-      const matchX = left + (i % cols) * (MAP.matchW + MAP_COL_GAP);
+      const boxTop = top + MAP.frameTitle + i * MAP.fixtureStep;
+      const matchX = left;
       return `
         <text x="${matchX}" y="${boxTop + 14}" font-size="${MAP_TEXT.small}" font-weight="700" fill="${MAP_COLORS.muted}" letter-spacing="0.5">MATCH ${i + 1}</text>
         ${mapWhen(`g-${gi}-${i}`, matchX + MAP.matchW, boxTop + 14, 'end')}
@@ -1922,53 +1916,16 @@ function mapGroup(group, x, top, gi, cols = 1) {
     }).join('')}`;
 }
 
-const mapSvgFrame = (width, height, label, body) => `
-  <svg class="map-svg" role="img" aria-label="${label}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"
-    font-family="${MAP_FONT.replace(/"/g, "'")}">
-    <rect width="${width}" height="${height}" fill="${MAP_COLORS.box}"/>
-    ${body}
-  </svg>`;
-
-// Printed page 1: only the groups, arranged to fill an A4 landscape page as fully as possible.
-function mapGroupsSvg() {
-  fitMapToNames(bracketModel().rounds);
-  const list = state.groups;
-  const name = (state.tournamentName || '').trim();
-  const top = MAP.top + (name ? 60 : 0);
-  const maxMatches = Math.max(...list.map(g => g.matches.length));
-  let best = null;
-  for (let perRow = 1; perRow <= list.length; perRow++) {
-    for (let cols = 1; cols <= maxMatches; cols++) {
-      const rows = Math.ceil(list.length / perRow);
-      const width = MAP.pad * 2 + perRow * mapGroupWidth(cols) + (perRow - 1) * MAP_COL_GAP;
-      const height = top + rows * mapGroupHeight({ matches: { length: maxMatches } }, cols) + (rows - 1) * MAP_COL_GAP + MAP.pad;
-      const scale = Math.min(277 / width, 188 / height);
-      if (!best || scale > best.scale + 1e-9) best = { perRow, cols, width, height, scale };
-    }
-  }
-  const { perRow, cols, width, height } = best;
-  const rowH = mapGroupHeight({ matches: { length: maxMatches } }, cols) + MAP_COL_GAP;
-  const parts = [];
-  if (name) parts.push(`<text x="${width / 2}" y="46" font-size="${MAP_TEXT.title}" font-weight="800" text-anchor="middle" fill="${MAP_COLORS.text}">${esc(name)}</text>`);
-  parts.push(`<text x="${width / 2}" y="${top - 36}" font-size="${MAP_TEXT.header}" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.muted}" letter-spacing="0.5">GROUP STAGE</text>`);
-  list.forEach((g, i) => {
-    const x = MAP.pad + (i % perRow) * (mapGroupWidth(cols) + MAP_COL_GAP);
-    parts.push(mapGroup(g, x, top + Math.floor(i / perRow) * rowH, i, cols));
-  });
-  return mapSvgFrame(width, height, 'Group stage matches', parts.join(''));
-}
-
 function mapArrow(x1, y1, x2, y2) {
   const mid = (x1 + x2) / 2;
   return `<path d="M${x1},${y1} H${mid} V${y2} H${x2}" fill="none" stroke="${MAP_COLORS.line}" stroke-width="1.6" marker-end="url(#arrow)"/>`;
 }
 
-// The full map. With { groups: false } it draws only the knockout bracket (used for the printed bracket page).
-function mapSvg({ groups = true } = {}) {
+function mapSvg() {
   const { rounds } = bracketModel();
   fitMapToNames(rounds);
   const roundCount = rounds.length;
-  const groupIndexes = groups ? state.groups.map((g, i) => i) : [];
+  const groupIndexes = state.groups.map((g, i) => i);
   const leftGroups = groupIndexes.slice(0, Math.ceil(groupIndexes.length / 2));
   const rightGroups = groupIndexes.slice(leftGroups.length);
   const groupHeight = i => mapGroupHeight(state.groups[i]);
@@ -2835,7 +2792,7 @@ document.head.append(printPage);
 addEventListener('beforeprint', () => {
   themeBeforePrint = document.documentElement.dataset.theme;
   delete document.documentElement.dataset.theme;
-  printPage.textContent = document.body.classList.contains('map-open') ? '@page { size: A4 landscape; margin: 10mm; }' : '';
+  printPage.textContent = document.body.classList.contains('map-open') ? '@page { size: A4 landscape; margin: 0; }' : '';
 });
 
 addEventListener('afterprint', () => {
@@ -2874,9 +2831,7 @@ function openMap() {
         <button class="small" data-map="close">${icon('x')}Close</button>
       </div>
     </div>
-    <div class="map-scroll">${mapSvg()}</div>
-    <div class="map-print">${mapGroupsSvg()}${mapSvg({ groups: false })}</div>`;
-  view.querySelectorAll('.map-print .map-svg').forEach(svg => svg.style.setProperty('--w', svg.viewBox.baseVal.width));
+    <div class="map-scroll">${mapSvg()}</div>`;
   view.addEventListener('click', event => {
     const action = event.target.closest('[data-map]')?.dataset.map;
     if (action === 'close') closeMap();
