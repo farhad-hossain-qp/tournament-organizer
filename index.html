@@ -216,6 +216,16 @@ label.radio-option input { flex: none; width: 18px; height: 18px; margin: 0; pad
   padding: 4px 0;
 }
 .fx-no { font-size: 12px; color: var(--muted); }
+.fx-when { grid-column: 2 / -1; display: flex; justify-content: center; margin-top: -2px; }
+.when {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border: 1px solid transparent; border-radius: 999px;
+  background: transparent; color: var(--muted); font-size: 12px; font-weight: 500;
+}
+.when .icon { width: 13px; height: 13px; }
+button.when:hover { background: var(--chip); color: var(--accent); }
+.when.set { color: var(--text); background: var(--chip); }
+.bk-card .when { margin-bottom: 6px; }
 .fx-vs { font-size: 11px; font-weight: 700; color: var(--muted); letter-spacing: 0.5px; }
 button.fx-team {
   display: flex;
@@ -493,6 +503,7 @@ button.add-player:hover .add-hint, button.add-player:focus-visible .add-hint { o
 .inline-add { margin-top: 16px; }
 .map-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; background: #ffffff; }
 .map-svg { display: block; width: 100%; height: auto; }
+.map-print { display: none; }
 @page { size: A4 portrait; margin: 12mm; }
 @media print {
   body { background: #ffffff; }
@@ -505,7 +516,11 @@ button.add-player:hover .add-hint, button.add-player:focus-visible .add-hint { o
   .map-view { position: static; overflow: visible; padding: 0; background: #ffffff; }
   .map-view .sheet-bar { display: none; }
   .map-scroll { overflow: visible; border: 0; }
-  .map-svg { min-width: 0 !important; width: 100%; max-height: 182mm; }
+  .map-scroll > .map-svg { display: none; }
+  .map-print { display: block; }
+  /* Print at 80% of the map's natural size; only shrink further if it doesn't fit the page. Never stretch. */
+  .map-print .map-svg { min-width: 0 !important; width: calc(var(--w) * 0.8px); max-width: 100%; height: auto; max-height: 188mm; margin: 0 auto; }
+  .map-print .map-svg + .map-svg { break-before: page; }
 }
 .stepper {
   position: sticky;
@@ -843,6 +858,8 @@ const ICONS = {
   skip: '<path d="m5 4 10 8-10 8V4zM19 5v14"/>',
   minus: '<path d="M5 12h14"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
 };
 
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
@@ -883,6 +900,7 @@ function freshState() {
     groups: null,
     advance: null,
     knockout: null,
+    schedule: {},
   };
 }
 
@@ -980,7 +998,7 @@ function returnFocus(element) {
   else app.focus();
 }
 
-function ask({ title, message = '', confirmText = 'OK', cancelText = 'Cancel', danger = false, input = null }) {
+function ask({ title, message = '', confirmText = 'OK', cancelText = 'Cancel', danger = false, input = null, inputType = 'text', allowEmpty = false }) {
   return new Promise(resolve => {
     const opener = document.activeElement;
     const overlay = document.createElement('div');
@@ -990,7 +1008,7 @@ function ask({ title, message = '', confirmText = 'OK', cancelText = 'Cancel', d
       <form>
         <h3 id="modalTitle">${esc(title)}</h3>
         ${message ? `<p class="muted" id="modalMessage">${esc(message)}</p>` : ''}
-        ${input !== null ? `<input type="text" name="value" value="${esc(input)}" aria-labelledby="modalTitle">` : ''}
+        ${input !== null ? `<input type="${inputType}" name="value" value="${esc(input)}" aria-labelledby="modalTitle">` : ''}
         <div class="modal-actions">
           <button type="button" class="ghost" data-cancel>${esc(cancelText)}</button>
           <button type="submit" class="${danger ? 'danger' : ''}">${esc(confirmText)}</button>
@@ -1015,7 +1033,7 @@ function ask({ title, message = '', confirmText = 'OK', cancelText = 'Cancel', d
       event.preventDefault();
       if (input === null) return close(true);
       const value = overlay.querySelector('input').value.trim();
-      if (value) close(value);
+      if (value || allowEmpty) close(value);
     });
     document.addEventListener('keydown', onKey);
     document.body.appendChild(overlay);
@@ -1247,6 +1265,7 @@ const actions = {
     }
     state.advance = state.advanceDraft;
     state.knockout = null;
+    state.schedule = {};
     fx.deal = true;
     fx.toast = '🎲 Groups are ready!';
   },
@@ -1290,6 +1309,21 @@ const actions = {
     advanceKnockout();
     fx.koWin = { round, match };
     if (state.knockout[round].length === 1) fx.champion = winner;
+  },
+
+  async scheduleMatch({ key, title }) {
+    const value = await ask({
+      title: `Schedule ${title}`,
+      message: 'Pick a date and time. Leave it empty to remove the schedule.',
+      confirmText: 'Save',
+      input: state.schedule?.[key] || '',
+      inputType: 'datetime-local',
+      allowEmpty: true,
+    });
+    if (value === null) return;
+    state.schedule ||= {};
+    if (value) state.schedule[key] = value;
+    else delete state.schedule[key];
   },
 
   celebrate() {
@@ -1369,6 +1403,20 @@ function clearFrom(step) {
   state.groups = null;
   state.advance = null;
   state.knockout = null;
+  state.schedule = {};
+}
+
+function formatWhen(value) {
+  return new Date(value).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+// Shows a match's scheduled time; unplayed matches get a button to set or change it.
+function whenBadge(key, title, played) {
+  const value = state.schedule?.[key];
+  const text = value ? formatWhen(value) : 'Schedule';
+  if (played) return value ? `<span class="when set">${icon('clock')}${esc(text)}</span>` : '';
+  return `<button type="button" class="when ${value ? 'set' : ''}" data-action="scheduleMatch" data-key="${key}" data-title="${esc(title)}"
+    aria-label="${value ? `${esc(title)} scheduled ${esc(text)}. Change` : `Schedule ${esc(title)}`}">${icon('clock')}${esc(text)}</button>`;
 }
 
 function potCountValue() {
@@ -1725,7 +1773,9 @@ function groupDrawPage() {
   return (teams ? `<div class="group-draw-layout">${settings}${teams}</div>` : settings) + groups;
 }
 
-const MAP = { matchW: 200, gap: 56, unit: 96, top: 64, fixtureLabel: 18, fixtureStep: 112, fixtureGap: 38, framePad: 16, frameTitle: 34, knockoutH: 72, pad: 24 };
+const MAP = { matchW: 200, gap: 48, unit: 150, top: 72, fixtureLabel: 24, fixtureStep: 150, fixtureGap: 30, framePad: 16, frameTitle: 42, groupH: 96, knockoutH: 114, pad: 24 };
+// Text sizes on the map. Kept large because the map shrinks to fit the page when printed.
+const MAP_TEXT = { name: 13, line: 16, small: 13, header: 16, group: 18, title: 30 };
 const MAP_COLORS = {
   box: '#ffffff', border: '#cbd2da', text: '#1b1f24', muted: '#5d6672', line: '#94a3b8',
   winBg: '#dcfce7', win: '#166534', accent: '#2563eb',
@@ -1740,10 +1790,25 @@ function textWidth(text, weight, size) {
   return measureContext.measureText(text).width;
 }
 
-function fitMapToNames() {
-  const names = allPairs().map(p => pairName(p.id));
-  const longest = (weight, size) => Math.max(0, ...names.map(n => textWidth(n, weight, size)));
-  MAP.matchW = Math.max(200, Math.ceil(longest(700, 13)) + 28);
+// Box width fits the longest single player name (each pair is drawn on two lines) or placeholder label.
+function fitMapToNames(rounds) {
+  const players = allPairs().flatMap(p => [p.a, p.b]);
+  const labels = rounds.flat().flatMap(m => [m.p1, m.p2]).filter(s => !s.id).map(s => s.label);
+  const longest = Math.max(0, ...players.map(n => textWidth(`${n} &`, 700, MAP_TEXT.name)), ...labels.map(n => textWidth(n, 400, MAP_TEXT.name)));
+  // Group match label line holds "MATCH n" on the left and the scheduled time on the right; keep room for both.
+  const times = Object.values(state.schedule || {}).map(v => textWidth(`🕒 ${formatWhen(v)}`, 600, MAP_TEXT.small));
+  const labelLine = textWidth('MATCH 99', 700, MAP_TEXT.small) + 16 + Math.max(0, ...times);
+  MAP.matchW = Math.max(180, Math.ceil(longest) + 28, Math.ceil(labelLine));
+}
+
+// Draws one side of a match: a pair on two lines (one player each), or a one-line placeholder label.
+function mapSlotText(slot, x, top, height, won, lost) {
+  const fill = won ? MAP_COLORS.win : slot.id && !lost ? MAP_COLORS.text : MAP_COLORS.muted;
+  const attrs = `x="${x}" font-size="${MAP_TEXT.name}" font-weight="${won ? 700 : 400}" fill="${fill}" ${slot.id ? '' : 'font-style="italic"'} ${lost ? 'text-decoration="line-through"' : ''}`;
+  const pair = slot.id && pairById(slot.id);
+  if (!pair) return `<text ${attrs} y="${top + height / 2 + 6}">${esc(slot.label || '')}</text>`;
+  const first = top + height / 2 - MAP_TEXT.line / 2 + 5;
+  return `<text ${attrs} y="${first}">${esc(pair.a)} &amp;</text><text ${attrs} y="${first + MAP_TEXT.line}">${esc(pair.b)}</text>`;
 }
 
 function pairName(id) {
@@ -1785,43 +1850,45 @@ function bracketModel() {
   return { rounds, seeds };
 }
 
-function mapKnockoutMatch(x, yc, match, isFinal) {
+// Small time label for a scheduled match on the map; empty when the match has no time.
+function mapWhen(key, x, y, anchor) {
+  const value = state.schedule?.[key];
+  return value ? `<text x="${x}" y="${y}" font-size="${MAP_TEXT.small}" font-weight="600" text-anchor="${anchor}" fill="${MAP_COLORS.muted}">🕒 ${esc(formatWhen(value))}</text>` : '';
+}
+
+function mapKnockoutMatch(x, yc, match, isFinal, key) {
   const w = MAP.matchW;
   const h = MAP.knockoutH;
-  const slot = (s, y, rowTop) => {
+  const slotH = h / 2 - 9;
+  const slot = (s, rowTop) => {
     const won = s.id && match.winner === s.id;
     const lost = s.id && match.winner && !won;
     return `
-      ${won ? `<rect x="${x + 1}" y="${rowTop}" width="${w - 2}" height="${h / 2 - 9}" rx="7" fill="${MAP_COLORS.winBg}"/>` : ''}
-      <text x="${x + 12}" y="${y}" font-size="13" font-weight="${won ? 700 : 400}"
-        fill="${won ? MAP_COLORS.win : s.id && !lost ? MAP_COLORS.text : MAP_COLORS.muted}"
-        ${s.id ? '' : 'font-style="italic"'} ${lost ? 'text-decoration="line-through"' : ''}>${esc(s.id ? pairName(s.id) : s.label)}</text>`;
+      ${won ? `<rect x="${x + 1}" y="${rowTop}" width="${w - 2}" height="${slotH}" rx="7" fill="${MAP_COLORS.winBg}"/>` : ''}
+      ${mapSlotText(s, x + 12, rowTop, slotH, won, lost)}`;
   };
   return `
     <g>
+      ${mapWhen(key, x + w / 2, yc - h / 2 - 8, 'middle')}
       <rect x="${x}" y="${yc - h / 2}" width="${w}" height="${h}" rx="8" fill="${MAP_COLORS.box}"/>
-      ${slot(match.p1, yc - 17, yc - h / 2 + 1)}
+      ${slot(match.p1, yc - h / 2 + 1)}
       <line x1="${x + 12}" y1="${yc}" x2="${x + w / 2 - 16}" y2="${yc}" stroke="${MAP_COLORS.border}"/>
-      <text x="${x + w / 2}" y="${yc + 4}" font-size="11" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.muted}">VS</text>
+      <text x="${x + w / 2}" y="${yc + 5}" font-size="${MAP_TEXT.small}" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.muted}">VS</text>
       <line x1="${x + w / 2 + 16}" y1="${yc}" x2="${x + w - 12}" y2="${yc}" stroke="${MAP_COLORS.border}"/>
-      ${slot(match.p2, yc + 27, yc + 8)}
+      ${slot(match.p2, yc + 8)}
       <rect x="${x}" y="${yc - h / 2}" width="${w}" height="${h}" rx="8" fill="none"
         stroke="${isFinal ? MAP_COLORS.accent : MAP_COLORS.border}" stroke-width="${isFinal ? 2 : 1}"/>
     </g>`;
 }
 
 function mapMatch(x, yc, match) {
-  const h = 56;
+  const h = MAP.groupH;
   const row = (slot, top) => {
     const won = slot.id && match.winner === slot.id;
     const lost = slot.id && match.winner && !won;
-    const text = slot.id ? pairName(slot.id) : slot.label;
     return `
       ${won ? `<rect x="${x + 1}" y="${top}" width="${MAP.matchW - 2}" height="${h / 2 - 1}" rx="7" fill="${MAP_COLORS.winBg}"/>` : ''}
-      <text x="${x + 12}" y="${top + 19}" font-size="13"
-        fill="${won ? MAP_COLORS.win : slot.id && !lost ? MAP_COLORS.text : MAP_COLORS.muted}"
-        font-weight="${won ? 700 : 400}" ${slot.id ? '' : 'font-style="italic"'}
-        ${lost ? 'text-decoration="line-through"' : ''}>${esc(text)}</text>`;
+      ${mapSlotText(slot, x + 12, top, h / 2 - 1, won, lost)}`;
   };
   return `
     <g>
@@ -1834,21 +1901,61 @@ function mapMatch(x, yc, match) {
     </g>`;
 }
 
-const mapGroupWidth = () => MAP.matchW + MAP.framePad * 2;
-const mapGroupHeight = group => MAP.frameTitle + group.matches.length * MAP.fixtureStep - MAP.fixtureGap + MAP.framePad;
+const MAP_COL_GAP = 24;
+const mapGroupWidth = (cols = 1) => cols * MAP.matchW + (cols - 1) * MAP_COL_GAP + MAP.framePad * 2;
+const mapGroupHeight = (group, cols = 1) => MAP.frameTitle + Math.ceil(group.matches.length / cols) * MAP.fixtureStep - MAP.fixtureGap + MAP.framePad;
 
-function mapGroup(group, x, top) {
-  const matchX = x + MAP.framePad;
+// Draws a group's dashed frame and its matches, laid out in `cols` columns (read left to right).
+function mapGroup(group, x, top, gi, cols = 1) {
+  const left = x + MAP.framePad;
   return `
-    <rect x="${x}" y="${top}" width="${mapGroupWidth()}" height="${mapGroupHeight(group)}" rx="12" fill="none"
+    <rect x="${x}" y="${top}" width="${mapGroupWidth(cols)}" height="${mapGroupHeight(group, cols)}" rx="12" fill="none"
       stroke="${MAP_COLORS.line}" stroke-width="1.4" stroke-dasharray="7 5"/>
-    <text x="${matchX}" y="${top + 24}" font-size="14" font-weight="700" fill="${MAP_COLORS.text}">${esc(group.name)}</text>
+    <text x="${left}" y="${top + 28}" font-size="${MAP_TEXT.group}" font-weight="700" fill="${MAP_COLORS.text}">${esc(group.name)}</text>
     ${group.matches.map((m, i) => {
-      const boxTop = top + MAP.frameTitle + i * MAP.fixtureStep;
+      const boxTop = top + MAP.frameTitle + Math.floor(i / cols) * MAP.fixtureStep;
+      const matchX = left + (i % cols) * (MAP.matchW + MAP_COL_GAP);
       return `
-        <text x="${matchX}" y="${boxTop + 12}" font-size="11" font-weight="700" fill="${MAP_COLORS.muted}" letter-spacing="0.5">MATCH ${i + 1}</text>
-        ${mapMatch(matchX, boxTop + MAP.fixtureLabel + 28, { p1: { id: m.p1 }, p2: { id: m.p2 }, winner: m.winner })}`;
+        <text x="${matchX}" y="${boxTop + 14}" font-size="${MAP_TEXT.small}" font-weight="700" fill="${MAP_COLORS.muted}" letter-spacing="0.5">MATCH ${i + 1}</text>
+        ${mapWhen(`g-${gi}-${i}`, matchX + MAP.matchW, boxTop + 14, 'end')}
+        ${mapMatch(matchX, boxTop + MAP.fixtureLabel + MAP.groupH / 2, { p1: { id: m.p1 }, p2: { id: m.p2 }, winner: m.winner })}`;
     }).join('')}`;
+}
+
+const mapSvgFrame = (width, height, label, body) => `
+  <svg class="map-svg" role="img" aria-label="${label}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"
+    font-family="${MAP_FONT.replace(/"/g, "'")}">
+    <rect width="${width}" height="${height}" fill="${MAP_COLORS.box}"/>
+    ${body}
+  </svg>`;
+
+// Printed page 1: only the groups, arranged to fill an A4 landscape page as fully as possible.
+function mapGroupsSvg() {
+  fitMapToNames(bracketModel().rounds);
+  const list = state.groups;
+  const name = (state.tournamentName || '').trim();
+  const top = MAP.top + (name ? 60 : 0);
+  const maxMatches = Math.max(...list.map(g => g.matches.length));
+  let best = null;
+  for (let perRow = 1; perRow <= list.length; perRow++) {
+    for (let cols = 1; cols <= maxMatches; cols++) {
+      const rows = Math.ceil(list.length / perRow);
+      const width = MAP.pad * 2 + perRow * mapGroupWidth(cols) + (perRow - 1) * MAP_COL_GAP;
+      const height = top + rows * mapGroupHeight({ matches: { length: maxMatches } }, cols) + (rows - 1) * MAP_COL_GAP + MAP.pad;
+      const scale = Math.min(277 / width, 188 / height);
+      if (!best || scale > best.scale + 1e-9) best = { perRow, cols, width, height, scale };
+    }
+  }
+  const { perRow, cols, width, height } = best;
+  const rowH = mapGroupHeight({ matches: { length: maxMatches } }, cols) + MAP_COL_GAP;
+  const parts = [];
+  if (name) parts.push(`<text x="${width / 2}" y="46" font-size="${MAP_TEXT.title}" font-weight="800" text-anchor="middle" fill="${MAP_COLORS.text}">${esc(name)}</text>`);
+  parts.push(`<text x="${width / 2}" y="${top - 36}" font-size="${MAP_TEXT.header}" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.muted}" letter-spacing="0.5">GROUP STAGE</text>`);
+  list.forEach((g, i) => {
+    const x = MAP.pad + (i % perRow) * (mapGroupWidth(cols) + MAP_COL_GAP);
+    parts.push(mapGroup(g, x, top + Math.floor(i / perRow) * rowH, i, cols));
+  });
+  return mapSvgFrame(width, height, 'Group stage matches', parts.join(''));
 }
 
 function mapArrow(x1, y1, x2, y2) {
@@ -1856,11 +1963,12 @@ function mapArrow(x1, y1, x2, y2) {
   return `<path d="M${x1},${y1} H${mid} V${y2} H${x2}" fill="none" stroke="${MAP_COLORS.line}" stroke-width="1.6" marker-end="url(#arrow)"/>`;
 }
 
-function mapSvg() {
-  fitMapToNames();
+// The full map. With { groups: false } it draws only the knockout bracket (used for the printed bracket page).
+function mapSvg({ groups = true } = {}) {
   const { rounds } = bracketModel();
+  fitMapToNames(rounds);
   const roundCount = rounds.length;
-  const groupIndexes = state.groups.map((g, i) => i);
+  const groupIndexes = groups ? state.groups.map((g, i) => i) : [];
   const leftGroups = groupIndexes.slice(0, Math.ceil(groupIndexes.length / 2));
   const rightGroups = groupIndexes.slice(leftGroups.length);
   const groupHeight = i => mapGroupHeight(state.groups[i]);
@@ -1869,12 +1977,12 @@ function mapSvg() {
   const bracketHeight = perSide * MAP.unit;
   const contentHeight = Math.max(bracketHeight, stackHeight(leftGroups), stackHeight(rightGroups), 140);
   const name = (state.tournamentName || '').trim();
-  const top = MAP.top + (name ? 52 : 0);
-  const height = top + contentHeight + 80;
+  const top = MAP.top + (name ? 60 : 0);
+  const height = top + contentHeight + 130;
 
   let x = MAP.pad;
   const groupLeftX = x;
-  x += mapGroupWidth() + MAP.gap;
+  if (leftGroups.length) x += mapGroupWidth() + MAP.gap;
   const leftX = [];
   for (let k = 0; k < roundCount - 1; k++) { leftX[k] = x; x += MAP.matchW + MAP.gap; }
   const finalX = x;
@@ -1882,7 +1990,7 @@ function mapSvg() {
   const rightX = [];
   for (let k = roundCount - 2; k >= 0; k--) { rightX[k] = x; x += MAP.matchW + MAP.gap; }
   const groupRightX = x;
-  const width = x + (rightGroups.length ? mapGroupWidth() : 0) + MAP.pad;
+  const width = rightGroups.length ? x + mapGroupWidth() + MAP.pad : x - MAP.gap + MAP.pad;
 
   const y0 = top + (contentHeight - bracketHeight) / 2;
   const centers = [];
@@ -1908,15 +2016,15 @@ function mapSvg() {
   placeGroups(rightGroups, groupRightX, 'right');
 
   const parts = [];
-  const headerY = top - 28;
-  if (name) parts.push(`<text x="${width / 2}" y="40" font-size="24" font-weight="800" text-anchor="middle" fill="${MAP_COLORS.text}">${esc(name)}</text>`);
-  const header = (cx, text) => `<text x="${cx}" y="${headerY}" font-size="13" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.muted}" letter-spacing="0.5">${text.toUpperCase()}</text>`;
+  const headerY = top - 36;
+  if (name) parts.push(`<text x="${width / 2}" y="46" font-size="${MAP_TEXT.title}" font-weight="800" text-anchor="middle" fill="${MAP_COLORS.text}">${esc(name)}</text>`);
+  const header = (cx, text) => `<text x="${cx}" y="${headerY}" font-size="${MAP_TEXT.header}" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.muted}" letter-spacing="0.5">${text.toUpperCase()}</text>`;
   for (let k = 0; k < roundCount - 1; k++) {
     const name = roundName(rounds[k].length * 2);
     parts.push(header(leftX[k] + MAP.matchW / 2, name), header(rightX[k] + MAP.matchW / 2, name));
   }
   parts.push(header(finalX + MAP.matchW / 2, 'Final'));
-  parts.push(header(groupLeftX + mapGroupWidth() / 2, 'Group stage'));
+  if (leftGroups.length) parts.push(header(groupLeftX + mapGroupWidth() / 2, 'Group stage'));
   if (rightGroups.length) parts.push(header(groupRightX + mapGroupWidth() / 2, 'Group stage'));
 
   for (let k = 1; k < roundCount; k++) {
@@ -1925,7 +2033,7 @@ function mapSvg() {
         const cx = matchX(k - 1, child);
         const cy = centers[k - 1][child];
         const px = matchX(k, i);
-        const py = centers[k][i] + (k < roundCount - 1 ? (child % 2 === 0 ? -22 : 22) : 0);
+        const py = centers[k][i] + (k < roundCount - 1 ? (child % 2 === 0 ? -MAP.knockoutH / 4 - 4 : MAP.knockoutH / 4 + 4) : 0);
         parts.push(isLeft(k - 1, child)
           ? mapArrow(cx + MAP.matchW, cy, px, py)
           : mapArrow(cx, cy, px + MAP.matchW, py));
@@ -1934,16 +2042,16 @@ function mapSvg() {
   }
 
   Object.entries(groupBoxes).forEach(([i, box]) => {
-    parts.push(mapGroup(state.groups[i], box.x, box.top));
+    parts.push(mapGroup(state.groups[i], box.x, box.top, i));
   });
-  rounds.forEach((round, k) => round.forEach((m, i) => parts.push(mapKnockoutMatch(matchX(k, i), centers[k][i], m, k === roundCount - 1))));
+  rounds.forEach((round, k) => round.forEach((m, i) => parts.push(mapKnockoutMatch(matchX(k, i), centers[k][i], m, k === roundCount - 1, `k-${k}-${i}`))));
 
   const final = rounds[roundCount - 1][0];
   const finalY = centers[roundCount - 1][0];
   parts.push(final.winner
-    ? `<text x="${finalX + MAP.matchW / 2}" y="${finalY + 58}" font-size="15" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.win}">Champions</text>
-       <text x="${finalX + MAP.matchW / 2}" y="${finalY + 78}" font-size="14" font-weight="600" text-anchor="middle" fill="${MAP_COLORS.text}">${esc(pairName(final.winner))}</text>`
-    : `<text x="${finalX + MAP.matchW / 2}" y="${finalY + 58}" font-size="13" text-anchor="middle" fill="${MAP_COLORS.muted}">Champions: to be decided</text>`);
+    ? `<text x="${finalX + MAP.matchW / 2}" y="${finalY + MAP.knockoutH / 2 + 30}" font-size="18" font-weight="700" text-anchor="middle" fill="${MAP_COLORS.win}">Champions</text>
+       ${[`${pairById(final.winner).a} &`, pairById(final.winner).b].map((line, n) => `<text x="${finalX + MAP.matchW / 2}" y="${finalY + MAP.knockoutH / 2 + 54 + n * MAP_TEXT.line}" font-size="${MAP_TEXT.name}" font-weight="600" text-anchor="middle" fill="${MAP_COLORS.text}">${esc(line)}</text>`).join('')}`
+    : `<text x="${finalX + MAP.matchW / 2}" y="${finalY + MAP.knockoutH / 2 + 30}" font-size="${MAP_TEXT.name}" text-anchor="middle" fill="${MAP_COLORS.muted}">Champions: to be decided</text>`);
 
   return `
   <svg class="map-svg" role="img" aria-label="Tournament map with every group match and the knockout bracket" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"
@@ -2073,6 +2181,7 @@ function fixtureRow(m, gi, mi) {
       ${team(m.p1, 1)}
       <span class="fx-vs" aria-hidden="true">VS</span>
       ${team(m.p2, 2)}
+      <div class="fx-when">${whenBadge(`g-${gi}-${mi}`, `${state.groups[gi].name}, match ${mi + 1}`, !!m.winner)}</div>
     </div>`;
 }
 
@@ -2126,6 +2235,7 @@ function bracketCard(m, r, mi, isFinal) {
   return `
     <div class="bk-card ${isFinal ? 'final' : ''}" role="group" aria-label="${matchTitle(r, mi)}">
       <div class="bk-label" aria-hidden="true">${matchTitle(r, mi)}</div>
+      ${whenBadge(`k-${r}-${mi}`, matchTitle(r, mi), !!m.winner)}
       ${team(m.p1, 1)}
       <div class="bk-vs" aria-hidden="true">VS</div>
       ${team(m.p2, 2)}
@@ -2758,16 +2868,20 @@ function openMap() {
     <div class="sheet-bar">
       <h2 id="mapTitle">Tournament map</h2>
       <div class="row">
+        <button class="ghost small" data-map="copy">${icon('copy')}Copy schedule</button>
         <button class="ghost small" data-map="download">${icon('download')}Download image</button>
         <button class="ghost small" data-map="print">${icon('print')}Print</button>
         <button class="small" data-map="close">${icon('x')}Close</button>
       </div>
     </div>
-    <div class="map-scroll">${mapSvg()}</div>`;
+    <div class="map-scroll">${mapSvg()}</div>
+    <div class="map-print">${mapGroupsSvg()}${mapSvg({ groups: false })}</div>`;
+  view.querySelectorAll('.map-print .map-svg').forEach(svg => svg.style.setProperty('--w', svg.viewBox.baseVal.width));
   view.addEventListener('click', event => {
     const action = event.target.closest('[data-map]')?.dataset.map;
     if (action === 'close') closeMap();
     if (action === 'download') downloadMap();
+    if (action === 'copy') copySchedule();
     if (action === 'print') window.print();
   });
   document.body.appendChild(view);
@@ -2782,6 +2896,57 @@ function closeMap() {
   document.querySelector('.map-view').remove();
   document.body.classList.remove('map-open');
   returnFocus(mapOpener);
+}
+
+const MATCH_MINUTES = 30;
+
+// Builds a chat-ready schedule: every match by group, then the knockout, then a time summary.
+function scheduleMessage() {
+  const { rounds } = bracketModel();
+  const groupItems = state.groups.map((g, gi) => g.matches.map((m, mi) => ({
+    title: `Match ${mi + 1}`, when: state.schedule?.[`g-${gi}-${mi}`], p1: pairName(m.p1), p2: pairName(m.p2),
+  })));
+  const knockoutItems = rounds.flatMap((round, r) => round.map((m, mi) => ({
+    title: matchTitle(r, mi), when: state.schedule?.[`k-${r}-${mi}`],
+    p1: m.p1.id ? pairName(m.p1.id) : m.p1.label, p2: m.p2.id ? pairName(m.p2.id) : m.p2.label,
+  })));
+  const all = [...groupItems.flat(), ...knockoutItems].filter(x => x.when);
+  const days = new Set(all.map(x => x.when.slice(0, 10)));
+  const time = date => date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const day = date => (days.size > 1 ? `${date.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })}, ` : '');
+  const end = when => new Date(new Date(when).getTime() + MATCH_MINUTES * 60000);
+  const range = (from, to) => `${day(from)}${time(from)} – ${time(to)}`;
+  const slot = when => (when ? range(new Date(when), end(when)) : 'Time to be announced');
+  const span = items => {
+    const timed = items.filter(x => x.when).map(x => x.when).sort();
+    return timed.length ? range(new Date(timed[0]), end(timed[timed.length - 1])) : 'To be announced';
+  };
+  const matchLines = x => [`${x.title} — ${slot(x.when)}`, '', `- ${x.p1}`, `- ${x.p2}`, ''];
+
+  const name = (state.tournamentName || '').trim() || 'Tournament';
+  const lines = [`## 🏓 ${name}`, ''];
+  state.groups.forEach((g, gi) => lines.push(`### ${g.name}`, '', ...groupItems[gi].flatMap(matchLines)));
+  const knockoutName = rounds.map((round, r) => (r === rounds.length - 1 ? 'Final' : `${roundName(round.length * 2)}s`)).join(', ').replace(/, (?=[^,]*$)/, ' & ').replace(/-final/g, '-Final');
+  if (knockoutItems.some(x => x.when)) lines.push('### Knockout', '', ...knockoutItems.flatMap(matchLines));
+  lines.push('### Schedule Summary', '');
+  state.groups.forEach((g, gi) => lines.push(`- ${g.name}: ${span(groupItems[gi])}`));
+  lines.push(`- ${knockoutName}: ${span(knockoutItems)}`);
+  return lines.join('\n');
+}
+
+async function copySchedule() {
+  const text = scheduleMessage();
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+  showToast('📋 Schedule copied. Paste it into your chat.');
 }
 
 function downloadMap() {
